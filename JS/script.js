@@ -16,6 +16,9 @@
     humanMark: 'X',          // which mark the human plays as vs AI
     myRole: 'X',            // for online mode, which mark this tab controls
     roomCode: null,
+    isHost: false,
+    peer: null,
+    conn: null,
     gameOver: false,
   };
 
@@ -130,64 +133,20 @@
   });
 
   /* ============================================================
-     ONLINE SETUP (localStorage-backed "room")
+     ONLINE SETUP — real peer-to-peer via WebRTC (PeerJS)
+     Works across different devices/browsers, not just same-browser tabs.
   ============================================================ */
-  const roomKey = (code) => `ttt_room_${code}`;
+  const PEER_PREFIX = 'fen-ttt-';
 
   function genCode(){
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789'; // no ambiguous chars
     let c = '';
-    for (let i=0;i<4;i++) c += chars[Math.floor(Math.random()*chars.length)];
+    for (let i=0;i<5;i++) c += chars[Math.floor(Math.random()*chars.length)];
     return c;
   }
 
-  function readRoom(code){
-    try { return JSON.parse(localStorage.getItem(roomKey(code))); }
-    catch(e){ return null; }
-  }
-  function writeRoom(code, data){
-    localStorage.setItem(roomKey(code), JSON.stringify(data));
-  }
-
-  function freshRoomBoard(){
-    return {
-      board: Array(9).fill(null),
-      turn: 'X',
-      winner: null,
-      winLine: null,
-      players: { X: null, O: null },
-      rematch: { X:false, O:false },
-      updatedAt: Date.now(),
-    };
-  }
-
-  $('#createRoomBtn').addEventListener('click', () => {
-    const name = $('#onlineName').value.trim() || 'Player 1';
-    const code = genCode();
-    const room = freshRoomBoard();
-    room.players.X = name;
-    writeRoom(code, room);
-
-    state.mode = 'online';
-    state.roomCode = code;
-    state.myRole = 'X';
-    state.names = { X: name, O: 'Waiting…' };
-
-    $('#onlineChoice').classList.add('hidden');
-    $('#onlineWaiting').classList.remove('hidden');
-    $('#roomCodeDisplay').textContent = code;
-    const link = buildShareLink(code);
-    $('#shareLinkInput').value = link;
-
-    watchRoom(code);
-  });
-
-  $('#copyLinkBtn').addEventListener('click', () => copyText($('#shareLinkInput').value));
-  $('#gameCopyBtn').addEventListener('click', () => copyText($('#gameShareLink').textContent));
-
-  function copyText(text){
-    navigator.clipboard?.writeText(text).then(() => toast('Link copied!'))
-      .catch(() => toast('Copy this: ' + text, 3500));
+  function peerIdForCode(code){
+    return PEER_PREFIX + code.toLowerCase().trim();
   }
 
   function buildShareLink(code){
@@ -197,91 +156,102 @@
     return url.toString();
   }
 
-  $('#joinRoomBtn').addEventListener('click', () => {
-    const code = $('#joinCode').value.trim().toUpperCase();
-    const name = $('#onlineName').value.trim() || 'Player 2';
-    joinRoom(code, name);
-  });
+  $('#copyLinkBtn').addEventListener('click', () => copyText($('#shareLinkInput').value));
+  $('#gameCopyBtn').addEventListener('click', () => copyText($('#gameShareLink').textContent));
 
-  $('#cancelRoomBtn').addEventListener('click', () => {
-    leaveRoomIfAny();
-    $('#onlineWaiting').classList.add('hidden');
-    $('#onlineChoice').classList.remove('hidden');
-  });
-
-  function joinRoom(code, name){
-    const room = readRoom(code);
-    if (!room){
-      toast("Room not found. Check the code.");
-      return;
-    }
-    if (!room.players.X){
-      toast("That room looks empty.");
-      return;
-    }
-    if (room.players.O && room.players.O !== name){
-      // already has a second player — join as spectator? Keep it simple: block.
-      toast("That room is already full.");
-      return;
-    }
-    room.players.O = name;
-    writeRoom(code, room);
-
-    state.mode = 'online';
-    state.roomCode = code;
-    state.myRole = 'O';
-    state.names = { X: room.players.X, O: name };
-
-    watchRoom(code);
-    enterGameScreenFromRoom(room);
+  function copyText(text){
+    navigator.clipboard?.writeText(text).then(() => toast('Link copied!'))
+      .catch(() => toast('Copy this: ' + text, 3500));
   }
 
-  let roomPoll = null;
-  function watchRoom(code){
-    window.addEventListener('storage', onStorageEvent);
-    clearInterval(roomPoll);
-    // Fallback poll in case storage events are throttled/missed
-    roomPoll = setInterval(() => {
-      const room = readRoom(code);
-      if (room) syncFromRoom(room);
-    }, 1200);
+  function setWaitingText(msg){
+    const el = $('#waitingMsgText');
+    if (el) el.textContent = msg;
   }
 
-  function onStorageEvent(e){
-    if (!state.roomCode) return;
-    if (e.key !== roomKey(state.roomCode)) return;
-    const room = readRoom(state.roomCode);
-    if (room) syncFromRoom(room);
-  }
-
-  function syncFromRoom(room){
-    // Waiting screen -> opponent just joined
-    if (screens.onlineSetup.classList.contains('active') && room.players.O){
-      state.names.O = room.players.O;
-      enterGameScreenFromRoom(room);
-      return;
+  // ---- shared peer/connection plumbing ----
+  function destroyPeer(){
+    if (state.conn){
+      try { state.conn.close(); } catch(e){}
+      state.conn = null;
     }
-    if (screens.game.classList.contains('active')){
-      state.board = room.board.slice();
-      state.turn = room.turn;
-      state.winner = room.winner;
-      state.winLine = room.winLine;
-      state.gameOver = !!room.winner;
-      state.names.O = room.players.O || state.names.O;
-      renderBoard();
-      updateStatus();
-      if (room.winner) handleRoundEnd(false);
-      if (room.rematch && room.rematch.X && room.rematch.O){
-        // both agreed — reset happens from whoever triggers write; just reflect fresh board
+    if (state.peer){
+      try { state.peer.destroy(); } catch(e){}
+      state.peer = null;
+    }
+  }
+
+  function sendState(extra){
+    if (!state.conn || !state.conn.open) return;
+    state.conn.send(Object.assign({
+      type: 'state',
+      board: state.board,
+      turn: state.turn,
+      winner: state.winner,
+      winLine: state.winLine,
+      names: state.names,
+    }, extra || {}));
+  }
+
+  function wireConnection(conn, myName){
+    state.conn = conn;
+    conn.on('open', () => {
+      conn.send({ type:'hello', name: myName });
+      if (state.isHost) setWaitingText('Connected — syncing up…');
+    });
+    conn.on('data', (data) => handlePeerData(data));
+    conn.on('close', () => {
+      toast("Your friend disconnected.");
+    });
+    conn.on('error', () => {
+      toast("Connection hiccup — you may need to reconnect.");
+    });
+  }
+
+  function handlePeerData(data){
+    if (!data || !data.type) return;
+
+    if (data.type === 'hello'){
+      if (state.isHost){
+        state.names.O = data.name;
+        // Host is authoritative on the very first handshake: send a fresh board.
+        state.board = Array(9).fill(null);
+        state.turn = 'X';
+        state.winner = null;
+        state.winLine = null;
+        state.gameOver = false;
+        enterGameScreenFromPeer();
+        sendState();
+      } else {
+        state.names.X = data.name;
       }
+      return;
+    }
+
+    if (data.type === 'state'){
+      state.board = data.board.slice();
+      state.turn = data.turn;
+      state.winner = data.winner;
+      state.winLine = data.winLine;
+      state.gameOver = !!data.winner;
+      if (data.names){
+        state.names.X = data.names.X || state.names.X;
+        state.names.O = data.names.O || state.names.O;
+      }
+      if (!screens.game.classList.contains('active')){
+        enterGameScreenFromPeer();
+      } else {
+        renderScores();
+        renderBoard();
+        updateStatus();
+        if (state.winner) handleRoundEnd(false);
+        else setMascot('idle', '');
+      }
+      return;
     }
   }
 
-  function enterGameScreenFromRoom(room){
-    state.board = room.board.slice();
-    state.turn = room.turn;
-    state.winner = room.winner;
-    state.gameOver = !!room.winner;
+  function enterGameScreenFromPeer(){
     state.scores = { X:0, O:0 };
     showScreen('game');
     $('#onlineShareStrip').classList.remove('hidden');
@@ -292,14 +262,94 @@
     setMascot('idle', '');
   }
 
+  // ---- create room (host) ----
+  $('#createRoomBtn').addEventListener('click', () => {
+    const name = $('#onlineName').value.trim() || 'Player 1';
+    const code = genCode();
+
+    state.mode = 'online';
+    state.isHost = true;
+    state.roomCode = code;
+    state.myRole = 'X';
+    state.names = { X: name, O: 'Waiting…' };
+
+    $('#onlineChoice').classList.add('hidden');
+    $('#onlineWaiting').classList.remove('hidden');
+    $('#roomCodeDisplay').textContent = code.toUpperCase();
+    $('#shareLinkInput').value = buildShareLink(code);
+    setWaitingText('Setting up your room…');
+
+    destroyPeer();
+    state.peer = new Peer(peerIdForCode(code));
+
+    state.peer.on('open', () => {
+      setWaitingText('Waiting for your friend to join…');
+    });
+    state.peer.on('connection', (conn) => {
+      wireConnection(conn, name);
+    });
+    state.peer.on('error', (err) => {
+      if (err && err.type === 'unavailable-id'){
+        toast("That code just got taken — creating a new one.");
+        $('#createRoomBtn').click();
+      } else {
+        toast("Couldn't set up the room. Check your connection and try again.");
+      }
+    });
+  });
+
+  // ---- join room (guest) ----
+  $('#joinRoomBtn').addEventListener('click', () => {
+    const code = $('#joinCode').value.trim().toLowerCase();
+    const name = $('#onlineName').value.trim() || 'Player 2';
+    if (!code){
+      toast('Enter a room code first.');
+      return;
+    }
+    joinRoom(code, name);
+  });
+
+  function joinRoom(code, name){
+    state.mode = 'online';
+    state.isHost = false;
+    state.roomCode = code;
+    state.myRole = 'O';
+    state.names = { X: 'Player 1', O: name };
+
+    destroyPeer();
+    state.peer = new Peer();
+
+    toast('Connecting…');
+
+    state.peer.on('open', () => {
+      const conn = state.peer.connect(peerIdForCode(code), { reliable: true });
+      wireConnection(conn, name);
+      conn.on('error', () => {
+        toast("Couldn't reach that room. Double-check the code.");
+      });
+    });
+    state.peer.on('error', (err) => {
+      if (err && err.type === 'peer-unavailable'){
+        toast("Room not found. Check the code and try again.");
+      } else {
+        toast("Connection error. Check your internet and try again.");
+      }
+    });
+  }
+
+  $('#cancelRoomBtn').addEventListener('click', () => {
+    leaveRoomIfAny();
+    $('#onlineWaiting').classList.add('hidden');
+    $('#onlineChoice').classList.remove('hidden');
+  });
+
   function leaveRoomIfAny(){
-    window.removeEventListener('storage', onStorageEvent);
-    clearInterval(roomPoll);
+    destroyPeer();
     state.roomCode = null;
     $('#onlineShareStrip').classList.add('hidden');
   }
 
-  // Auto-join if opened via ?room=CODE
+  // Auto-fill room code if opened via ?room=CODE
   window.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('room');
@@ -429,13 +479,7 @@
     updateStatus();
 
     if (state.mode === 'online'){
-      const room = readRoom(state.roomCode) || freshRoomBoard();
-      room.board = state.board.slice();
-      room.turn = state.turn;
-      room.winner = state.winner;
-      room.winLine = state.winLine;
-      room.updatedAt = Date.now();
-      writeRoom(state.roomCode, room);
+      sendState();
     }
 
     if (state.gameOver){
@@ -556,13 +600,7 @@
 
   $('#rematchBtn').addEventListener('click', () => {
     if (state.mode === 'online'){
-      const room = readRoom(state.roomCode) || freshRoomBoard();
-      room.board = Array(9).fill(null);
-      room.turn = 'X';
-      room.winner = null;
-      room.winLine = null;
-      writeRoom(state.roomCode, room);
-      state.board = room.board.slice();
+      state.board = Array(9).fill(null);
       state.turn = 'X';
       state.winner = null;
       state.winLine = null;
@@ -570,6 +608,7 @@
       renderBoard();
       updateStatus();
       setMascot('idle', '');
+      sendState();
       return;
     }
     state.board = Array(9).fill(null);
