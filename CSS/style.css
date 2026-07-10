@@ -227,14 +227,16 @@ h2{font-family:'Baloo 2',cursive; font-size:1.6rem; margin:6px 0 2px; color:var(
   padding:18px; text-align:center; margin-bottom:16px;
 }
 .room-code-label{display:block; font-size:.78rem; color:var(--ink-dim); font-weight:700; margin-bottom:6px; letter-spacing:.5px; text-transform:uppercase;}
-.room-code{font-family:'JetBrains Mono',monospace; font-size:2.1rem; font-weight:700; letter-spacing:6px; color:var(--amber-deep);}
+.room-code{font-family:'JetBrains Mono',monospace; font-size:2.1rem; font-weight:700; letter-spacing:6px; color:var(--amber-deep); word-break:break-all;}
 
 .link-row{display:flex; gap:8px; margin-bottom:16px;}
 .link-row input{
-  flex:1; background:#fff; border:1.5px solid var(--line); color:var(--ink-dim);
+  flex:1; min-width:0; background:#fff; border:1.5px solid var(--line); color:var(--ink-dim);
   border-radius:var(--radius-sm); padding:12px; font-size:.82rem; font-family:'JetBrains Mono',monospace;
+  overflow:hidden; text-overflow:ellipsis;
 }
 .copy-btn{
+  flex-shrink:0;
   background:var(--sage-deep); color:#fff; border:none; border-radius:var(--radius-sm);
   padding:0 18px; font-weight:800; cursor:pointer; font-family:'Nunito',sans-serif;
 }
@@ -242,7 +244,7 @@ h2{font-family:'Baloo 2',cursive; font-size:1.6rem; margin:6px 0 2px; color:var(
 .copy-btn:hover{background:#6d7c67;}
 
 .waiting-msg{display:flex; align-items:center; gap:8px; color:var(--ink-dim); font-weight:700; font-size:.9rem; margin-bottom:12px;}
-.pulse-dot{width:9px; height:9px; border-radius:50%; background:var(--amber-deep); animation:pulse 1.2s ease-in-out infinite;}
+.pulse-dot{width:9px; height:9px; border-radius:50%; background:var(--amber-deep); animation:pulse 1.2s ease-in-out infinite; flex-shrink:0;}
 @keyframes pulse{0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.35; transform:scale(1.4);}}
 
 .fine-print{font-size:.76rem; color:#a3987f; line-height:1.5; margin-bottom:18px;}
@@ -250,9 +252,9 @@ h2{font-family:'Baloo 2',cursive; font-size:1.6rem; margin:6px 0 2px; color:var(
 .online-share-strip{
   display:flex; align-items:center; gap:8px; justify-content:center; flex-wrap:wrap;
   background:var(--cream-soft); border-radius:var(--radius-sm); padding:10px 12px; margin:14px 0 4px;
-  font-size:.78rem; color:var(--ink-dim);
+  font-size:.78rem; color:var(--ink-dim); max-width:100%;
 }
-.online-share-strip code{color:var(--amber-deep); font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; max-width:180px; white-space:nowrap;}
+.online-share-strip code{color:var(--amber-deep); font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; max-width:150px; white-space:nowrap;}
 
 /* ---------- game screen ---------- */
 .game-topbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;}
