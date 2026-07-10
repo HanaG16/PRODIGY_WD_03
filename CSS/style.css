@@ -247,6 +247,12 @@ h2{font-family:'Baloo 2',cursive; font-size:1.6rem; margin:6px 0 2px; color:var(
 .pulse-dot{width:9px; height:9px; border-radius:50%; background:var(--amber-deep); animation:pulse 1.2s ease-in-out infinite; flex-shrink:0;}
 @keyframes pulse{0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.35; transform:scale(1.4);}}
 
+.join-status{
+  display:flex; align-items:center; gap:8px; justify-content:center;
+  color:var(--ink-dim); font-weight:700; font-size:.85rem; margin-top:10px;
+}
+.secondary-btn:disabled, .primary-btn:disabled{opacity:.6; cursor:not-allowed;}
+
 .fine-print{font-size:.76rem; color:#a3987f; line-height:1.5; margin-bottom:18px;}
 
 .online-share-strip{
