@@ -19,6 +19,7 @@
     isHost: false,
     peer: null,
     conn: null,
+    connectTimeout: null,
     gameOver: false,
   };
 
@@ -252,6 +253,8 @@
   }
 
   function enterGameScreenFromPeer(){
+    clearTimeout(state.connectTimeout);
+    setJoining(false);
     state.scores = { X:0, O:0 };
     showScreen('game');
     $('#onlineShareStrip').classList.remove('hidden');
@@ -264,6 +267,11 @@
 
   // ---- create room (host) ----
   $('#createRoomBtn').addEventListener('click', () => {
+    if (typeof Peer === 'undefined'){
+      toast("Connection feature failed to load. Refresh the page and try again.", 4000);
+      return;
+    }
+
     const name = $('#onlineName').value.trim() || 'Player 1';
     const code = genCode();
 
@@ -280,12 +288,26 @@
     setWaitingText('Setting up your room…');
 
     destroyPeer();
-    state.peer = new Peer(peerIdForCode(code));
+    clearTimeout(state.connectTimeout);
+
+    try {
+      state.peer = new Peer(peerIdForCode(code));
+    } catch (e){
+      toast("Couldn't start the connection. Refresh and try again.", 4000);
+      return;
+    }
+
+    state.connectTimeout = setTimeout(() => {
+      if (screens.onlineSetup.classList.contains('active') && !state.conn){
+        setWaitingText("Taking a while… check your internet connection.");
+      }
+    }, 10000);
 
     state.peer.on('open', () => {
       setWaitingText('Waiting for your friend to join…');
     });
     state.peer.on('connection', (conn) => {
+      clearTimeout(state.connectTimeout);
       wireConnection(conn, name);
     });
     state.peer.on('error', (err) => {
@@ -293,13 +315,29 @@
         toast("That code just got taken — creating a new one.");
         $('#createRoomBtn').click();
       } else {
-        toast("Couldn't set up the room. Check your connection and try again.");
+        toast("Couldn't set up the room. Check your connection and try again.", 4000);
+        setWaitingText("Connection failed. Try again or check your internet.");
       }
     });
   });
 
   // ---- join room (guest) ----
-  $('#joinRoomBtn').addEventListener('click', () => {
+  const joinBtn = $('#joinRoomBtn');
+  const joinStatus = $('#joinStatus');
+  const joinStatusText = $('#joinStatusText');
+
+  function setJoining(isJoining, statusText){
+    joinBtn.disabled = isJoining;
+    $('#createRoomBtn').disabled = isJoining;
+    joinStatus.classList.toggle('hidden', !isJoining);
+    if (statusText) joinStatusText.textContent = statusText;
+  }
+
+  joinBtn.addEventListener('click', () => {
+    if (typeof Peer === 'undefined'){
+      toast("Connection feature failed to load. Refresh the page and try again.", 4000);
+      return;
+    }
     const code = $('#joinCode').value.trim().toLowerCase();
     const name = $('#onlineName').value.trim() || 'Player 2';
     if (!code){
@@ -317,22 +355,42 @@
     state.names = { X: 'Player 1', O: name };
 
     destroyPeer();
-    state.peer = new Peer();
+    clearTimeout(state.connectTimeout);
+    setJoining(true, 'Connecting…');
 
-    toast('Connecting…');
+    try {
+      state.peer = new Peer();
+    } catch (e){
+      setJoining(false);
+      toast("Couldn't start the connection. Refresh and try again.", 4000);
+      return;
+    }
+
+    state.connectTimeout = setTimeout(() => {
+      setJoining(false);
+      toast("Couldn't reach that room. Check the code and your internet.", 4500);
+    }, 10000);
 
     state.peer.on('open', () => {
+      setJoining(true, 'Connecting to room…');
       const conn = state.peer.connect(peerIdForCode(code), { reliable: true });
       wireConnection(conn, name);
+      conn.on('open', () => {
+        clearTimeout(state.connectTimeout);
+      });
       conn.on('error', () => {
-        toast("Couldn't reach that room. Double-check the code.");
+        clearTimeout(state.connectTimeout);
+        setJoining(false);
+        toast("Couldn't reach that room. Double-check the code.", 4000);
       });
     });
     state.peer.on('error', (err) => {
+      clearTimeout(state.connectTimeout);
+      setJoining(false);
       if (err && err.type === 'peer-unavailable'){
-        toast("Room not found. Check the code and try again.");
+        toast("Room not found. Check the code and try again.", 4000);
       } else {
-        toast("Connection error. Check your internet and try again.");
+        toast("Connection error. Check your internet and try again.", 4000);
       }
     });
   }
@@ -345,6 +403,8 @@
 
   function leaveRoomIfAny(){
     destroyPeer();
+    clearTimeout(state.connectTimeout);
+    setJoining(false);
     state.roomCode = null;
     $('#onlineShareStrip').classList.add('hidden');
   }
